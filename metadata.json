@@ -1,0 +1,6 @@
+{
+  "name": "IE Production Plan & Hourly Tracking",
+  "description": "ระบบคำนวณแผนการผลิตรายรุ่นต่อกะ ติดตามผลรายชั่วโมง วิเคราะห์จุดโฟกัสราย Model และแจ้งเตือนเมื่อยอดผลิตต่ำกว่าเป้าหมายแบบเรียลไทม์สำหรับวิศวกรอุตสาหการ (IE)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
