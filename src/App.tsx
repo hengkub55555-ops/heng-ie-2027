@@ -263,6 +263,14 @@ export default function App() {
   const [quickJigCount, setQuickJigCount] = useState<number>(1);
   const [quickQtyPlan, setQuickQtyPlan] = useState<number>(63);
 
+  // Quick inline Add Hourly Slot state (+ เพิ่มช่องรายชั่วโมง)
+  const [quickHourLabel, setQuickHourLabel] = useState<string>('');
+  const [quickHourDuration, setQuickHourDuration] = useState<number>(1);
+  const [quickHourModel, setQuickHourModel] = useState<string>('TM19+TM21');
+  const [quickHourPlan, setQuickHourPlan] = useState<string>('');
+  const [quickHourActual, setQuickHourActual] = useState<string>('');
+  const [quickHourNote, setQuickHourNote] = useState<string>('');
+
   // Separate models into Line A, Line B, and All using isModelInLine
   const lineAModels = useMemo(
     () => models.filter((m) => isModelInLine(m, 'A')),
@@ -342,14 +350,27 @@ export default function App() {
     return baseTotal.map((slot, idx) => {
       const a = syncedScheduleA[idx];
       const b = syncedScheduleB[idx];
+      const hasCustomPlan =
+        (a && a.customPlan !== null && a.customPlan !== undefined) ||
+        (b && b.customPlan !== null && b.customPlan !== undefined);
+      const effectivePlan = hasCustomPlan ? (a?.plan ?? 0) + (b?.plan ?? 0) : slot.plan;
       const hasActual = (a && a.actual !== null) || (b && b.actual !== null);
       const sumActual = hasActual ? (a?.actual ?? 0) + (b?.actual ?? 0) : null;
-      const combinedNote = [a?.note ? `A: ${a.note}` : '', b?.note ? `B: ${b.note}` : '']
+      const maxDowntime = Math.max(a?.downtimeMin ?? 0, b?.downtimeMin ?? 0);
+      const modelStr = a?.modelRunning || b?.modelRunning || slot.modelRunning;
+      const combinedNote = [
+        a?.note ? (b?.note && a.note !== b.note ? `A: ${a.note}` : a.note) : '',
+        b?.note && a?.note !== b.note ? `B: ${b.note}` : '',
+      ]
         .filter(Boolean)
         .join(' | ');
       return {
         ...slot,
+        plan: effectivePlan,
+        customPlan: hasCustomPlan ? effectivePlan : null,
         actual: sumActual,
+        downtimeMin: maxDowntime,
+        modelRunning: modelStr,
         note: combinedNote,
       };
     });
@@ -883,6 +904,16 @@ export default function App() {
           );
           return cur.map((r, idx) => (idx === slotIndex ? { ...r, note } : r));
         });
+      } else if (activeSheet === 'line_a') {
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, note } : r));
+        });
       } else {
         setHourlyRecordsA((prev) => {
           const cur = generateHourlySchedule(
@@ -893,9 +924,389 @@ export default function App() {
           );
           return cur.map((r, idx) => (idx === slotIndex ? { ...r, note } : r));
         });
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, note } : r));
+        });
       }
     },
     [activeSheet, lineAQtyPlan, lineBQtyPlan, shiftConfig.workingHours, shiftConfig.customHourLabels]
+  );
+
+  // Direct Line A or Line B Actual edit per hour (for Summary table & Manager Report)
+  const handleHourlyLineActualChange = useCallback(
+    (line: 'A' | 'B', slotIndex: number, valueStr: string) => {
+      const parsed = valueStr.trim() === '' ? null : Math.max(0, Number(valueStr));
+      if (line === 'A') {
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, actual: parsed } : r));
+        });
+      } else {
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, actual: parsed } : r));
+        });
+      }
+    },
+    [lineAQtyPlan, lineBQtyPlan, shiftConfig.workingHours, shiftConfig.customHourLabels]
+  );
+
+  // Editable Plan/Hr target per hour slot
+  const handleHourlyPlanChange = useCallback(
+    (slotIndex: number, valueStr: string) => {
+      const parsed = valueStr.trim() === '' ? null : Math.max(0, Number(valueStr));
+      if (activeSheet === 'line_a') {
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) =>
+            idx === slotIndex
+              ? { ...r, customPlan: parsed, plan: parsed ?? r.plan }
+              : r
+          );
+        });
+      } else if (activeSheet === 'line_b') {
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) =>
+            idx === slotIndex
+              ? { ...r, customPlan: parsed, plan: parsed ?? r.plan }
+              : r
+          );
+        });
+      } else {
+        const shareA = totalPlantQty > 0 ? lineAQtyPlan / totalPlantQty : 0.5315;
+        const planA = parsed === null ? null : Math.round(parsed * shareA);
+        const planB = parsed === null ? null : Math.max(0, parsed - (planA ?? 0));
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) =>
+            idx === slotIndex
+              ? { ...r, customPlan: planA, plan: planA ?? r.plan }
+              : r
+          );
+        });
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) =>
+            idx === slotIndex
+              ? { ...r, customPlan: planB, plan: planB ?? r.plan }
+              : r
+          );
+        });
+      }
+    },
+    [
+      activeSheet,
+      lineAQtyPlan,
+      lineBQtyPlan,
+      totalPlantQty,
+      shiftConfig.workingHours,
+      shiftConfig.customHourLabels,
+    ]
+  );
+
+  // Editable Model Running per hour slot
+  const handleHourlyModelRunningChange = useCallback(
+    (slotIndex: number, modelRunning: string) => {
+      if (activeSheet === 'line_b') {
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, modelRunning } : r));
+        });
+      } else if (activeSheet === 'line_a') {
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, modelRunning } : r));
+        });
+      } else {
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, modelRunning } : r));
+        });
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, modelRunning } : r));
+        });
+      }
+    },
+    [activeSheet, lineAQtyPlan, lineBQtyPlan, shiftConfig.workingHours, shiftConfig.customHourLabels]
+  );
+
+  // Editable Downtime (minutes) per hour slot
+  const handleHourlyDowntimeChange = useCallback(
+    (slotIndex: number, valueStr: string) => {
+      const mins = Math.max(0, Number(valueStr) || 0);
+      if (activeSheet === 'line_b') {
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, downtimeMin: mins } : r));
+        });
+      } else {
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            shiftConfig.workingHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) => (idx === slotIndex ? { ...r, downtimeMin: mins } : r));
+        });
+      }
+    },
+    [activeSheet, lineAQtyPlan, lineBQtyPlan, shiftConfig.workingHours, shiftConfig.customHourLabels]
+  );
+
+  // Add a new Hourly Slot (+ เพิ่มช่องรายชั่วโมง)
+  const handleAddHourSlot = useCallback(
+    (
+      durationToAdd: number = 1,
+      customLabel?: string,
+      customPlanVal?: number | null,
+      initialActual?: number | null,
+      modelRunningStr?: string,
+      noteStr?: string
+    ) => {
+      const safeAdd = durationToAdd === 0.5 ? 0.5 : 1;
+      const nextHours = Math.min(24, Number((shiftConfig.workingHours + safeAdd).toFixed(1)));
+      const newSlotIdx = syncedScheduleA.length;
+
+      setShiftConfig((prev) => {
+        const nextCustomLabels = { ...(prev.customHourLabels ?? {}) };
+        if (customLabel && customLabel.trim() !== '') {
+          nextCustomLabels[newSlotIdx] = customLabel.trim();
+        }
+        return {
+          ...prev,
+          workingHours: nextHours,
+          roundShiftTotalToTen: false,
+          customHourLabels: nextCustomLabels,
+        };
+      });
+
+      // Keep model formulas synced with new working hours
+      setModels((prevModels) =>
+        prevModels.map((m) => {
+          if (
+            shiftConfig.formulaMode === 'jig_drives_qty' ||
+            shiftConfig.formulaMode === 'uph_drives_qty'
+          ) {
+            const newQty = Math.round(m.uph * nextHours);
+            return {
+              ...m,
+              qtyPlan: newQty,
+              highlightZero: newQty === 0,
+            };
+          } else {
+            const newUph = Math.round(m.qtyPlan / nextHours);
+            const totalJig = m.jigA + m.jigB;
+            const maxCap = totalJig * shiftConfig.standardUphPerJig * nextHours;
+            const util = maxCap > 0 ? Number(((m.qtyPlan / maxCap) * 100).toFixed(1)) : 0;
+            return {
+              ...m,
+              uph: newUph,
+              utilizationPercent: util,
+            };
+          }
+        })
+      );
+
+      if (
+        customPlanVal !== undefined ||
+        initialActual !== undefined ||
+        modelRunningStr ||
+        noteStr
+      ) {
+        const shareA = totalPlantQty > 0 ? lineAQtyPlan / totalPlantQty : 0.5315;
+        const cPlanA =
+          customPlanVal != null
+            ? activeSheet === 'line_a'
+              ? customPlanVal
+              : activeSheet === 'line_b'
+              ? null
+              : Math.round(customPlanVal * shareA)
+            : null;
+        const cPlanB =
+          customPlanVal != null
+            ? activeSheet === 'line_b'
+              ? customPlanVal
+              : activeSheet === 'line_a'
+              ? null
+              : Math.max(0, customPlanVal - (cPlanA ?? 0))
+            : null;
+        const actA =
+          initialActual != null
+            ? activeSheet === 'line_a'
+              ? initialActual
+              : activeSheet === 'line_b'
+              ? null
+              : Math.round(initialActual * shareA)
+            : null;
+        const actB =
+          initialActual != null
+            ? activeSheet === 'line_b'
+              ? initialActual
+              : activeSheet === 'line_a'
+              ? null
+              : Math.max(0, initialActual - (actA ?? 0))
+            : null;
+
+        setHourlyRecordsA((prev) => {
+          const cur = generateHourlySchedule(
+            lineAQtyPlan,
+            nextHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) =>
+            idx === cur.length - 1
+              ? {
+                  ...r,
+                  label: customLabel?.trim() || r.label,
+                  customPlan: cPlanA,
+                  plan: cPlanA ?? r.plan,
+                  actual: actA,
+                  modelRunning: modelRunningStr || r.modelRunning,
+                  note: noteStr || r.note,
+                }
+              : r
+          );
+        });
+
+        setHourlyRecordsB((prev) => {
+          const cur = generateHourlySchedule(
+            lineBQtyPlan,
+            nextHours,
+            prev,
+            shiftConfig.customHourLabels
+          );
+          return cur.map((r, idx) =>
+            idx === cur.length - 1
+              ? {
+                  ...r,
+                  label: customLabel?.trim() || r.label,
+                  customPlan: cPlanB,
+                  plan: cPlanB ?? r.plan,
+                  actual: actB,
+                  modelRunning: modelRunningStr || r.modelRunning,
+                  note: noteStr || r.note,
+                }
+              : r
+          );
+        });
+      }
+    },
+    [
+      shiftConfig.workingHours,
+      shiftConfig.formulaMode,
+      shiftConfig.standardUphPerJig,
+      shiftConfig.customHourLabels,
+      syncedScheduleA.length,
+      totalPlantQty,
+      lineAQtyPlan,
+      lineBQtyPlan,
+      activeSheet,
+    ]
+  );
+
+  // Remove a specific Hourly Slot
+  const handleRemoveHourSlot = useCallback(
+    (slotIndex: number) => {
+      if (syncedScheduleA.length <= 1) return;
+      const targetSlot = syncedScheduleA[slotIndex];
+      const durToRemove = targetSlot ? targetSlot.durationHours : 1;
+      const nextHours = Math.max(1, Number((shiftConfig.workingHours - durToRemove).toFixed(1)));
+
+      setShiftConfig((prev) => {
+        const nextLabels: Record<number, string> = {};
+        if (prev.customHourLabels) {
+          Object.entries(prev.customHourLabels).forEach(([k, v]) => {
+            const numK = Number(k);
+            if (numK < slotIndex) nextLabels[numK] = v;
+            else if (numK > slotIndex) nextLabels[numK - 1] = v;
+          });
+        }
+        return {
+          ...prev,
+          workingHours: nextHours,
+          roundShiftTotalToTen: false,
+          customHourLabels: nextLabels,
+        };
+      });
+
+      setHourlyRecordsA((prev) =>
+        prev
+          .filter((_, idx) => idx !== slotIndex)
+          .map((r, idx) => ({ ...r, slotIndex: idx, id: `hr-slot-${idx}` }))
+      );
+      setHourlyRecordsB((prev) =>
+        prev
+          .filter((_, idx) => idx !== slotIndex)
+          .map((r, idx) => ({ ...r, slotIndex: idx, id: `hr-slot-${idx}` }))
+      );
+      handleUpdateWorkingHours(nextHours);
+    },
+    [syncedScheduleA, shiftConfig.workingHours, handleUpdateWorkingHours]
   );
 
   const handleUpdateModel = useCallback((id: string, patch: Partial<ModelPlanItem>) => {
@@ -1606,6 +2017,8 @@ export default function App() {
             kpiState={kpiState}
             onNavigateSheet={setActiveSheet}
             onUpdateHourLabel={handleUpdateHourLabel}
+            onAddHourSlot={(dur) => handleAddHourSlot(dur)}
+            onUpdateHourlyLineActual={handleHourlyLineActualChange}
           />
         )}
 
@@ -2571,8 +2984,26 @@ export default function App() {
                       </button>
                     </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] text-slate-600">ปรับชม.ทำงาน:</span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleAddHourSlot(1)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#0B4F8A] hover:bg-[#083B66] text-white font-bold text-xs shadow-2xs transition-colors whitespace-nowrap"
+                        title="เพิ่มช่องชั่วโมงการผลิตอีก 1 ชั่วโมงเต็ม"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>เพิ่มช่องรายชั่วโมง (+1 ชม.)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddHourSlot(0.5)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-2xs transition-colors whitespace-nowrap"
+                        title="เพิ่มช่องครึ่งชั่วโมง (+0.5 ชม.)"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>เพิ่มช่อง +0.5 ชม.</span>
+                      </button>
+                      <span className="text-[11px] text-slate-600 ml-1">ชม.รวม:</span>
                       <button
                         type="button"
                         onClick={() => handleUpdateWorkingHours(shiftConfig.workingHours - 0.5)}
@@ -2582,28 +3013,20 @@ export default function App() {
                         -0.5
                       </button>
                       <span className="font-mono-num font-bold text-[#083B66] px-1">
-                        {shiftConfig.workingHours} ชม.
+                        {shiftConfig.workingHours} ชม. ({currentSheetHourlyRows.length} ช่อง)
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateWorkingHours(shiftConfig.workingHours + 0.5)}
-                        className="px-2 py-0.5 rounded bg-white border border-slate-300 hover:bg-slate-100 font-mono-num font-bold text-slate-800"
-                        title="เพิ่มชั่วโมงทำงาน 0.5 ชม."
-                      >
-                        +0.5
-                      </button>
                     </div>
                   </div>
 
                   <div className="p-3.5 grid grid-cols-1 xl:grid-cols-12 gap-4">
-                    {/* Left Sub-table (4 cols): เป้าหมายรายชั่วโมง */}
-                    <div className="xl:col-span-4">
+                    {/* Left Sub-table (3 cols): เป้าหมายรายชั่วโมง */}
+                    <div className="xl:col-span-3">
                       <div className="flex items-center justify-between mb-2">
                         <h3 className="text-xs sm:text-sm font-bold text-[#083B66]">
                           เป้าหมายรายชั่วโมง ({currentSheetMetrics.lineName})
                         </h3>
                         <span className="text-[10px] text-slate-500 no-print">
-                          คลิกแก้ไขช่อง Hour ได้ทันที
+                          แก้ไข Hour / Plan ได้
                         </span>
                       </div>
                       <div className="overflow-x-auto">
@@ -2611,7 +3034,7 @@ export default function App() {
                           <thead>
                             <tr className="bg-[#138A63] text-white font-semibold">
                               <th className="py-1.5 px-2 text-center border border-slate-300">
-                                Hour (คลิกแก้เวลาได้)
+                                Hour
                               </th>
                               <th className="py-1.5 px-2 text-right border border-slate-300">
                                 Plan/Hr
@@ -2627,38 +3050,74 @@ export default function App() {
                                 key={`target-${row.id}`}
                                 className="even:bg-emerald-50/40 hover:bg-emerald-50"
                               >
-                                <td className="py-1 px-1.5 text-center font-mono-num font-semibold text-slate-800 border border-slate-200">
+                                <td className="py-1 px-1 text-center font-mono-num font-semibold text-slate-800 border border-slate-200">
                                   <input
                                     type="text"
                                     aria-label={`แก้ไขเวลา Hour แถวที่ ${idx + 1} (ตารางเป้าหมาย)`}
                                     value={row.label}
                                     onChange={(e) => handleUpdateHourLabel(idx, e.target.value)}
-                                    className="w-full min-w-[78px] px-1 py-0.5 text-center font-mono-num font-bold text-slate-900 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#0B7A58] rounded focus:outline-none"
+                                    className="w-full min-w-[74px] px-1 py-0.5 text-center font-mono-num font-bold text-slate-900 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#0B7A58] rounded focus:outline-none"
                                   />
                                 </td>
-                                <td className="py-1.5 px-2 text-right font-mono-num text-slate-800 border border-slate-200">
-                                  {row.plan.toLocaleString()}
+                                <td className="py-1 px-1.5 text-right font-mono-num text-slate-800 border border-slate-200">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    aria-label={`แก้ไขเป้าหมาย Plan ชั่วโมงที่ ${row.label}`}
+                                    value={row.plan}
+                                    onChange={(e) => handleHourlyPlanChange(idx, e.target.value)}
+                                    className="w-14 px-1 py-0.5 text-right font-mono-num font-semibold text-slate-900 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#0B7A58] rounded focus:outline-none"
+                                  />
                                 </td>
-                                <td className="py-1.5 px-2.5 text-right font-mono-num font-bold text-slate-900 border border-slate-200">
+                                <td className="py-1.5 px-2 text-right font-mono-num font-bold text-slate-900 border border-slate-200">
                                   {row.cumPlan.toLocaleString()}
                                 </td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
+                        <div className="mt-2 flex items-center gap-1.5 no-print">
+                          <button
+                            type="button"
+                            onClick={() => handleAddHourSlot(1)}
+                            className="flex-1 inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5 text-[#0B7A58]" />
+                            <span>เพิ่มช่อง +1 ชม.</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleAddHourSlot(0.5)}
+                            className="inline-flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold transition-colors"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>+0.5 ชม.</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Right Main Tracking Table (8 cols): ตารางติดตามการผลิตรายชั่วโมง */}
-                    <div className="xl:col-span-8">
+                    {/* Right Main Tracking Table (9 cols): ตารางติดตามการผลิตรายชั่วโมง */}
+                    <div className="xl:col-span-9">
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                         <h3 className="text-xs sm:text-sm font-bold text-[#083B66]">
-                          ตารางติดตามการผลิตรายชั่วโมง ({currentSheetMetrics.lineName})
+                          ตารางติดตามการผลิตรายชั่วโมง ({currentSheetMetrics.lineName} · {currentSheetHourlyRows.length} ช่องชั่วโมง)
                         </h3>
                         <span className="text-[11px] text-slate-500 no-print">
-                          แก้ไขช่อง <strong>Hour, Actual, หมายเหตุ</strong> แล้วระบบบันทึกอัตโนมัติทันที
+                          แก้ไขช่อง <strong>Hour, รุ่นที่ผลิต, Plan, Actual, เวลาหยุดไลน์, หมายเหตุ</strong> หรือกด <strong>+ เพิ่มช่องรายชั่วโมง</strong> ด้านล่างได้ทันที
                         </span>
                       </div>
+
+                      {/* Datalist for Model Running per Hour */}
+                      <datalist id="hourly-model-running-list">
+                        <option value="TM19+TM21" />
+                        <option value="T520 / TM19+TM21" />
+                        <option value="TM19+TM21 / BM23" />
+                        <option value="TM19+TM21 / SBS550 / TM14" />
+                        {models.map((m) => (
+                          <option key={`dl-${m.id}`} value={m.modelName} />
+                        ))}
+                      </datalist>
 
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs border-collapse">
@@ -2671,11 +3130,24 @@ export default function App() {
                               <th className="py-1.5 px-2 text-center border border-slate-300">
                                 Hour (แก้ไขได้)
                               </th>
+                              <th className="py-1.5 px-2 text-left border border-slate-300">
+                                รุ่นที่ผลิต (Model)
+                              </th>
                               <th className="py-1.5 px-2 text-right border border-slate-300">
                                 Plan
                               </th>
+                              {activeSheet === 'summary' && (
+                                <>
+                                  <th className="py-1.5 px-1.5 text-center border border-slate-300 bg-sky-900">
+                                    Act Line A
+                                  </th>
+                                  <th className="py-1.5 px-1.5 text-center border border-slate-300 bg-indigo-900">
+                                    Act Line B
+                                  </th>
+                                </>
+                              )}
                               <th className="py-1.5 px-2 text-center border border-slate-300">
-                                Actual
+                                {activeSheet === 'summary' ? 'Actual รวม' : 'Actual'}
                               </th>
                               <th className="py-1.5 px-2 text-right border border-slate-300">
                                 Diff
@@ -2692,8 +3164,14 @@ export default function App() {
                               <th className="py-1.5 px-2 text-right border border-slate-300">
                                 % Achv.
                               </th>
+                              <th className="py-1.5 px-1.5 text-center border border-slate-300 no-print">
+                                หยุด (นาที)
+                              </th>
                               <th className="py-1.5 px-2 text-left border border-slate-300 no-print">
                                 หมายเหตุ / ปัญหาหน้างาน
+                              </th>
+                              <th className="py-1.5 px-1.5 text-center border border-slate-300 no-print">
+                                ลบ
                               </th>
                             </tr>
                           </thead>
@@ -2704,6 +3182,8 @@ export default function App() {
                                 row.rowSeverity === 'level2_10pct' ||
                                 row.rowSeverity === 'level3_15pct' ||
                                 row.rowSeverity === 'level4_20pct';
+                              const rowA = computedRowsA[idx];
+                              const rowB = computedRowsB[idx];
 
                               return (
                                 <tr
@@ -2714,18 +3194,76 @@ export default function App() {
                                       : 'even:bg-slate-50/70 hover:bg-sky-50/50'
                                   } transition-colors`}
                                 >
-                                  <td className="py-1 px-1.5 text-center font-mono-num font-semibold text-slate-800 border border-slate-200">
+                                  <td className="py-1 px-1 text-center font-mono-num font-semibold text-slate-800 border border-slate-200">
                                     <input
                                       type="text"
                                       aria-label={`แก้ไขเวลา Hour แถวที่ ${idx + 1}`}
                                       value={row.label}
                                       onChange={(e) => handleUpdateHourLabel(idx, e.target.value)}
-                                      className="w-full min-w-[82px] px-1 py-0.5 text-center font-mono-num font-bold text-slate-900 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#0B4F8A] rounded focus:outline-none"
+                                      className="w-full min-w-[78px] px-1 py-0.5 text-center font-mono-num font-bold text-slate-900 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#0B4F8A] rounded focus:outline-none"
                                     />
                                   </td>
-                                  <td className="py-1 px-2 text-right font-mono-num text-slate-800 border border-slate-200">
-                                    {row.plan.toLocaleString()}
+                                  <td className="py-1 px-1.5 border border-slate-200">
+                                    <input
+                                      type="text"
+                                      list="hourly-model-running-list"
+                                      aria-label={`รุ่นที่ผลิตในชั่วโมงที่ ${row.label}`}
+                                      placeholder="ระบุรุ่นที่ผลิต..."
+                                      value={row.modelRunning || ''}
+                                      onChange={(e) =>
+                                        handleHourlyModelRunningChange(idx, e.target.value)
+                                      }
+                                      className="w-full min-w-[96px] px-1.5 py-0.5 text-[11px] font-semibold text-[#083B66] bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#0B4F8A] rounded focus:outline-none"
+                                    />
                                   </td>
+                                  <td className="py-1 px-1.5 text-right font-mono-num text-slate-800 border border-slate-200">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      aria-label={`เป้าหมาย Plan ชั่วโมงที่ ${row.label}`}
+                                      value={row.plan}
+                                      onChange={(e) => handleHourlyPlanChange(idx, e.target.value)}
+                                      className="w-14 px-1 py-0.5 text-right font-mono-num font-semibold text-slate-800 bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-300 focus:border-[#0B4F8A] rounded focus:outline-none"
+                                    />
+                                  </td>
+                                  {activeSheet === 'summary' && (
+                                    <>
+                                      <td className="py-1 px-1 text-center border border-slate-200 bg-sky-50/30">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          aria-label={`ยอดผลิตจริง Line A ชั่วโมงที่ ${row.label}`}
+                                          placeholder="-"
+                                          value={
+                                            rowA?.actual === null || rowA?.actual === undefined
+                                              ? ''
+                                              : rowA.actual
+                                          }
+                                          onChange={(e) =>
+                                            handleHourlyLineActualChange('A', idx, e.target.value)
+                                          }
+                                          className="w-14 px-1 py-0.5 text-right font-mono-num font-bold text-[#083B66] bg-white border border-sky-200 rounded focus:outline-none focus:ring-1 focus:ring-[#0B4F8A]"
+                                        />
+                                      </td>
+                                      <td className="py-1 px-1 text-center border border-slate-200 bg-indigo-50/30">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          aria-label={`ยอดผลิตจริง Line B ชั่วโมงที่ ${row.label}`}
+                                          placeholder="-"
+                                          value={
+                                            rowB?.actual === null || rowB?.actual === undefined
+                                              ? ''
+                                              : rowB.actual
+                                          }
+                                          onChange={(e) =>
+                                            handleHourlyLineActualChange('B', idx, e.target.value)
+                                          }
+                                          className="w-14 px-1 py-0.5 text-right font-mono-num font-bold text-indigo-900 bg-white border border-indigo-200 rounded focus:outline-none focus:ring-1 focus:ring-indigo-700"
+                                        />
+                                      </td>
+                                    </>
+                                  )}
                                   <td className="py-1 px-1.5 text-center border border-slate-200">
                                     <input
                                       type="number"
@@ -2800,6 +3338,23 @@ export default function App() {
                                       </span>
                                     )}
                                   </td>
+                                  <td className="py-1 px-1 text-center border border-slate-200 no-print">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="60"
+                                      aria-label={`เวลาหยุดไลน์ชั่วโมงที่ ${row.label} (นาที)`}
+                                      value={row.downtimeMin || 0}
+                                      onChange={(e) =>
+                                        handleHourlyDowntimeChange(idx, e.target.value)
+                                      }
+                                      className={`w-12 px-1 py-0.5 text-center font-mono-num rounded border focus:outline-none ${
+                                        (row.downtimeMin || 0) > 5
+                                          ? 'bg-red-50 text-red-700 font-bold border-red-300'
+                                          : 'bg-transparent text-slate-600 border-transparent hover:border-slate-300 focus:bg-white'
+                                      }`}
+                                    />
+                                  </td>
                                   <td className="py-1 px-2 border border-slate-200 no-print">
                                     <input
                                       type="text"
@@ -2809,8 +3364,19 @@ export default function App() {
                                       onChange={(e) =>
                                         handleHourlyNoteChange(idx, e.target.value)
                                       }
-                                      className="w-full min-w-[110px] px-1.5 py-0.5 text-[11px] bg-transparent border-b border-transparent hover:border-slate-300 focus:border-[#0B4F8A] focus:bg-white focus:outline-none text-slate-700"
+                                      className="w-full min-w-[100px] px-1.5 py-0.5 text-[11px] bg-transparent border-b border-transparent hover:border-slate-300 focus:border-[#0B4F8A] focus:bg-white focus:outline-none text-slate-700"
                                     />
+                                  </td>
+                                  <td className="py-1 px-1 text-center border border-slate-200 no-print">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveHourSlot(idx)}
+                                      disabled={currentSheetHourlyRows.length <= 1}
+                                      title={`ลบช่องชั่วโมง ${row.label}`}
+                                      className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-30 transition-colors"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
                                   </td>
                                 </tr>
                               );
@@ -2823,11 +3389,30 @@ export default function App() {
                               }`}
                             >
                               <td className="py-1.5 px-2 text-center border border-slate-400/30 font-sans">
-                                รวม
+                                รวม ({currentSheetHourlyRows.length} ช่อง)
+                              </td>
+                              <td className="py-1.5 px-2 text-left border border-slate-400/30 font-sans text-[11px] text-sky-100">
+                                {shiftConfig.workingHours} ชม.
                               </td>
                               <td className="py-1.5 px-2 text-right border border-slate-400/30">
-                                {currentSheetMetrics.qtyPlan.toLocaleString()}
+                                {currentSheetHourlyRows
+                                  .reduce((s, r) => s + r.plan, 0)
+                                  .toLocaleString()}
                               </td>
+                              {activeSheet === 'summary' && (
+                                <>
+                                  <td className="py-1.5 px-1.5 text-center border border-slate-400/30 bg-sky-900">
+                                    {lineAMetrics.cumActualAtLatest !== null
+                                      ? lineAMetrics.cumActualAtLatest.toLocaleString()
+                                      : '-'}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-center border border-slate-400/30 bg-indigo-900">
+                                    {lineBMetrics.cumActualAtLatest !== null
+                                      ? lineBMetrics.cumActualAtLatest.toLocaleString()
+                                      : '-'}
+                                  </td>
+                                </>
+                              )}
                               <td className="py-1.5 px-2 text-center border border-slate-400/30">
                                 {currentSheetMetrics.cumActualAtLatest !== null
                                   ? currentSheetMetrics.cumActualAtLatest.toLocaleString()
@@ -2841,7 +3426,9 @@ export default function App() {
                                   : '-'}
                               </td>
                               <td className="py-1.5 px-2 text-right border border-slate-400/30">
-                                {currentSheetMetrics.qtyPlan.toLocaleString()}
+                                {currentSheetHourlyRows
+                                  .reduce((s, r) => s + r.plan, 0)
+                                  .toLocaleString()}
                               </td>
                               <td className="py-1.5 px-2 text-right border border-slate-400/30">
                                 {currentSheetMetrics.cumActualAtLatest !== null
@@ -2860,10 +3447,138 @@ export default function App() {
                                   ? `${currentSheetMetrics.achvPercentAtLatest.toFixed(1)}%`
                                   : '-'}
                               </td>
-                              <td className="py-1.5 px-2 border border-slate-400/30 no-print" />
+                              <td className="py-1.5 px-1.5 text-center border border-slate-400/30 no-print">
+                                {currentSheetHourlyRows.reduce(
+                                  (s, r) => s + (r.downtimeMin || 0),
+                                  0
+                                )}
+                              </td>
+                              <td
+                                colSpan={2}
+                                className="py-1.5 px-2 border border-slate-400/30 no-print"
+                              />
                             </tr>
                           </tfoot>
                         </table>
+                      </div>
+
+                      {/* Quick Inline Form to Add Custom Hourly Slot (+ เพิ่มช่องรายชั่วโมงบน Web) */}
+                      <div className="mt-3 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 no-print">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                          <div className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                            <Plus className="w-4 h-4 text-[#0B7A58]" />
+                            <span>
+                              เพิ่มช่องรายชั่วโมงในตาราง ({currentSheetMetrics.lineName}) — กำหนดช่วงเวลา, รุ่นที่ผลิต, และเป้าหมายรายชั่วโมง
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-emerald-800">
+                            ปัจจุบันมี {currentSheetHourlyRows.length} ช่องชั่วโมง ({shiftConfig.workingHours} ชม.)
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-end text-xs">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                              ชื่อช่อง Hour (เว้นว่าง=ออโต้)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder={`เช่น H${Math.ceil(shiftConfig.workingHours + 1)} หรือ 06:30-07:30`}
+                              value={quickHourLabel}
+                              onChange={(e) => setQuickHourLabel(e.target.value)}
+                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded font-mono-num text-slate-900 focus:outline-none focus:ring-1 focus:ring-[#0B7A58]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                              ระยะเวลาต่อช่อง
+                            </label>
+                            <select
+                              aria-label="เลือกระยะเวลาช่องชั่วโมงที่จะเพิ่ม"
+                              value={quickHourDuration}
+                              onChange={(e) => setQuickHourDuration(Number(e.target.value))}
+                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded font-semibold text-slate-900 focus:outline-none focus:ring-1 focus:ring-[#0B7A58]"
+                            >
+                              <option value={1}>1.0 ชั่วโมงเต็ม (+1 ชม.)</option>
+                              <option value={0.5}>0.5 ครึ่งชั่วโมง (+30 นาที)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                              รุ่นที่ผลิต (Model)
+                            </label>
+                            <input
+                              type="text"
+                              list="hourly-model-running-list"
+                              placeholder="เช่น TM19+TM21"
+                              value={quickHourModel}
+                              onChange={(e) => setQuickHourModel(e.target.value)}
+                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-slate-900 focus:outline-none focus:ring-1 focus:ring-[#0B7A58]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                              เป้า Plan (เว้นว่าง=คำนวณตาม UPH)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder={`${Math.round(currentSheetMetrics.targetUph * quickHourDuration)}`}
+                              value={quickHourPlan}
+                              onChange={(e) => setQuickHourPlan(e.target.value)}
+                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded font-mono-num text-slate-900 focus:outline-none focus:ring-1 focus:ring-[#0B7A58]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                              ยอดผลิตจริง Actual (ถ้ามี)
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="-"
+                              value={quickHourActual}
+                              onChange={(e) => setQuickHourActual(e.target.value)}
+                              className="w-full px-2 py-1 bg-white border border-slate-300 rounded font-mono-num text-slate-900 focus:outline-none focus:ring-1 focus:ring-[#0B7A58]"
+                            />
+                          </div>
+
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const customPlanNum =
+                                  quickHourPlan.trim() === ''
+                                    ? null
+                                    : Math.max(0, Number(quickHourPlan));
+                                const initialActNum =
+                                  quickHourActual.trim() === ''
+                                    ? null
+                                    : Math.max(0, Number(quickHourActual));
+                                handleAddHourSlot(
+                                  quickHourDuration,
+                                  quickHourLabel,
+                                  customPlanNum,
+                                  initialActNum,
+                                  quickHourModel,
+                                  quickHourNote
+                                );
+                                setQuickHourLabel('');
+                                setQuickHourPlan('');
+                                setQuickHourActual('');
+                                setQuickHourNote('');
+                              }}
+                              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0B7A58] hover:bg-[#096347] text-white font-bold shadow-2xs transition-colors whitespace-nowrap"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>+ เพิ่มช่องรายชั่วโมง</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>

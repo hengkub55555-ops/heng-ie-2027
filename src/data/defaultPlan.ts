@@ -342,12 +342,18 @@ export function generateHourlySchedule(
         ? customHourLabels[idx]
         : slot.defaultLabel;
 
+    const effectivePlan =
+      prev && prev.customPlan !== undefined && prev.customPlan !== null
+        ? prev.customPlan
+        : slot.plan;
+
     return {
       id: `hr-slot-${idx}`,
       slotIndex: idx,
       label: resolvedLabel,
       durationHours: slot.duration,
-      plan: slot.plan,
+      plan: effectivePlan,
+      customPlan: prev?.customPlan ?? null,
       actual: prev ? prev.actual : null,
       downtimeMin: prev ? prev.downtimeMin : 0,
       modelRunning: prev

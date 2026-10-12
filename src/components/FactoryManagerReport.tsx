@@ -61,6 +61,8 @@ interface FactoryManagerReportProps {
   kpiState: ProductionKpiState;
   onNavigateSheet: (sheet: 'summary' | 'line_a' | 'line_b' | 'ie_config') => void;
   onUpdateHourLabel?: (slotIndex: number, newLabel: string) => void;
+  onAddHourSlot?: (durationHours: number) => void;
+  onUpdateHourlyLineActual?: (line: 'A' | 'B', slotIndex: number, valueStr: string) => void;
 }
 
 export const FactoryManagerReport: React.FC<FactoryManagerReportProps> = ({
@@ -75,6 +77,8 @@ export const FactoryManagerReport: React.FC<FactoryManagerReportProps> = ({
   kpiState,
   onNavigateSheet,
   onUpdateHourLabel,
+  onAddHourSlot,
+  onUpdateHourlyLineActual,
 }) => {
   const [copied, setCopied] = useState(false);
   const [managerCustomNote, setManagerCustomNote] = useState(() => {
@@ -624,12 +628,32 @@ export const FactoryManagerReport: React.FC<FactoryManagerReportProps> = ({
 
           {/* Section 3: Hourly Side-by-Side Comparison (Line A vs Line B vs Combined) */}
           <div>
-            <h3 className="text-sm sm:text-base font-bold text-[#083B66] mb-2.5 flex items-center gap-2">
-              <Gauge className="w-4 h-4 text-emerald-700" />
-              <span>
-                2. ตารางเปรียบเทียบแผนและผลผลิตรายชั่วโมงแยกตามสายการผลิต (Line A vs Line B Hourly Matrix)
-              </span>
-            </h3>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+              <h3 className="text-sm sm:text-base font-bold text-[#083B66] flex items-center gap-2">
+                <Gauge className="w-4 h-4 text-emerald-700" />
+                <span>
+                  2. ตารางเปรียบเทียบแผนและผลผลิตรายชั่วโมงแยกตามสายการผลิต (Line A vs Line B Hourly Matrix)
+                </span>
+              </h3>
+              {onAddHourSlot && (
+                <div className="flex items-center gap-1.5 no-print">
+                  <button
+                    type="button"
+                    onClick={() => onAddHourSlot(1)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg bg-[#0B7A58] hover:bg-[#096347] text-white transition-colors"
+                  >
+                    <span>+ เพิ่มช่องรายชั่วโมง (+1 ชม.)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onAddHourSlot(0.5)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 transition-colors"
+                  >
+                    <span>+ เพิ่มครึ่งชั่วโมง (+0.5 ชม.)</span>
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
                 <thead>
@@ -697,8 +721,20 @@ export const FactoryManagerReport: React.FC<FactoryManagerReportProps> = ({
                         <td className="py-1 px-2 text-right text-slate-600 border border-slate-200 bg-sky-50/20">
                           {rowA?.plan ?? 0}
                         </td>
-                        <td className="py-1 px-2 text-right font-bold text-slate-900 border border-slate-200 bg-sky-50/20">
-                          {rowA?.actual ?? '-'}
+                        <td className="py-1 px-1.5 text-right font-bold text-slate-900 border border-slate-200 bg-sky-50/20">
+                          {onUpdateHourlyLineActual ? (
+                            <input
+                              type="number"
+                              min="0"
+                              aria-label={`ยอดผลิตจริง Line A ชั่วโมงที่ ${totRow.label}`}
+                              placeholder="-"
+                              value={rowA?.actual === null || rowA?.actual === undefined ? '' : rowA.actual}
+                              onChange={(e) => onUpdateHourlyLineActual('A', idx, e.target.value)}
+                              className="w-14 px-1 py-0.5 text-right font-mono-num font-bold bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-[#0B4F8A]"
+                            />
+                          ) : (
+                            rowA?.actual ?? '-'
+                          )}
                         </td>
                         <td className="py-1 px-2 text-right text-slate-700 border border-slate-200 bg-sky-50/20">
                           {rowA?.cumActual ?? '-'}
@@ -717,8 +753,20 @@ export const FactoryManagerReport: React.FC<FactoryManagerReportProps> = ({
                         <td className="py-1 px-2 text-right text-slate-600 border border-slate-200 bg-indigo-50/20">
                           {rowB?.plan ?? 0}
                         </td>
-                        <td className="py-1 px-2 text-right font-bold text-slate-900 border border-slate-200 bg-indigo-50/20">
-                          {rowB?.actual ?? '-'}
+                        <td className="py-1 px-1.5 text-right font-bold text-slate-900 border border-slate-200 bg-indigo-50/20">
+                          {onUpdateHourlyLineActual ? (
+                            <input
+                              type="number"
+                              min="0"
+                              aria-label={`ยอดผลิตจริง Line B ชั่วโมงที่ ${totRow.label}`}
+                              placeholder="-"
+                              value={rowB?.actual === null || rowB?.actual === undefined ? '' : rowB.actual}
+                              onChange={(e) => onUpdateHourlyLineActual('B', idx, e.target.value)}
+                              className="w-14 px-1 py-0.5 text-right font-mono-num font-bold bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-700"
+                            />
+                          ) : (
+                            rowB?.actual ?? '-'
+                          )}
                         </td>
                         <td className="py-1 px-2 text-right text-slate-700 border border-slate-200 bg-indigo-50/20">
                           {rowB?.cumActual ?? '-'}

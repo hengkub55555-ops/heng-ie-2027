@@ -32,6 +32,7 @@ export interface HourlyRecord {
   label: string; // Editable Hour label, e.g. "H1", "20:00-21:00", "H1 (20:00-21:00)"
   durationHours: number; // 1.0 or 0.5
   plan: number;
+  customPlan?: number | null; // Optional manual override for this hour's Plan target
   actual: number | null;
   downtimeMin: number;
   modelRunning: string;
